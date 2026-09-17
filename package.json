@@ -8,6 +8,18 @@
 		"cliproxyapi",
 		"web-search"
 	],
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/hkfires/pi-cliproxyapi-websearch.git"
+	},
+	"homepage": "https://github.com/hkfires/pi-cliproxyapi-websearch#readme",
+	"bugs": {
+		"url": "https://github.com/hkfires/pi-cliproxyapi-websearch/issues"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
 	"files": [
 		"extensions"
 	],
