@@ -1,6 +1,6 @@
 {
 	"name": "pi-cliproxyapi-websearch",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Zero-configuration native web search injection for CLIProxyAPI in Pi",
 	"type": "module",
 	"keywords": [
