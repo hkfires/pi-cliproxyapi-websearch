@@ -1,7 +1,11 @@
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import assert from "node:assert/strict";
 import { beforeEach, describe, it, mock } from "node:test";
-import cliproxyapiWebSearch, { TOOL_NAME } from "../extensions/index.ts";
+import cliproxyapiWebSearch, {
+	formatDuration,
+	TOOL_NAME,
+	type WebSearchRenderState,
+} from "../extensions/index.ts";
 
 let registeredTool: ToolDefinition | undefined;
 let registeredCommand: any;
@@ -155,6 +159,93 @@ describe("extension registration", () => {
 		);
 		const partialLines = partialComp.render(80);
 		assert.ok(partialLines.some((l: string) => l.includes("Searching web for: test...")));
+	});
+
+	it("formats duration correctly", () => {
+		assert.equal(formatDuration(0), "0.0s");
+		assert.equal(formatDuration(1100), "1.1s");
+		assert.equal(formatDuration(2540), "2.5s");
+		assert.equal(formatDuration(-100), "0.0s");
+	});
+
+	it("renders execution time (Took / Elapsed) matching shell tool conventions", () => {
+		assert.ok(registeredTool?.renderResult);
+		const theme = {
+			fg: (_color: string, text: string) => text,
+		} as any;
+
+		// Collapsed with duration
+		const collapsedWithTime = registeredTool.renderResult(
+			{
+				content: [{ type: "text", text: "Summary text" }],
+				details: { model: "gpt-5.6-sol", sourcesCount: 3, durationMs: 1100 },
+			} as any,
+			{ expanded: false, isPartial: false },
+			theme,
+			{} as any,
+		);
+		const collapsedLines = collapsedWithTime.render(80);
+		assert.ok(collapsedLines.some((l: string) => l.includes("Completed via gpt-5.6-sol (3 sources)")));
+		assert.ok(collapsedLines.some((l: string) => l.includes("Took 1.1s")));
+		assert.equal(collapsedLines.length, 3);
+		assert.equal(collapsedLines[1]?.trim(), "");
+
+		// Expanded with duration
+		const expandedWithTime = registeredTool.renderResult(
+			{
+				content: [{ type: "text", text: "Summary text" }],
+				details: { model: "gpt-5.6-sol", sourcesCount: 3, durationMs: 2300 },
+			} as any,
+			{ expanded: true, isPartial: false },
+			theme,
+			{} as any,
+		);
+		const expandedLines = expandedWithTime.render(80);
+		assert.ok(expandedLines.some((l: string) => l.includes("Summary text")));
+		assert.ok(expandedLines.some((l: string) => l.includes("Took 2.3s")));
+
+		// Error with duration
+		const errorWithTime = registeredTool.renderResult(
+			{
+				content: [{ type: "text", text: "Rate limit reached" }],
+				details: { error: "Rate limit reached", durationMs: 800 },
+			} as any,
+			{ expanded: false, isPartial: false },
+			theme,
+			{} as any,
+		);
+		const errorLines = errorWithTime.render(80);
+		assert.ok(errorLines.some((l: string) => l.includes("✗ Rate limit reached")));
+		assert.ok(errorLines.some((l: string) => l.includes("Took 0.8s")));
+
+		// Partial with live state timer
+		const state: WebSearchRenderState = { startedAt: Date.now() - 1500 };
+		const partialWithState = registeredTool.renderResult(
+			{
+				content: [{ type: "text", text: "Connecting..." }],
+				details: {},
+			} as any,
+			{ expanded: false, isPartial: true },
+			theme,
+			{ state, invalidate: () => {} } as any,
+		);
+		const partialLines = partialWithState.render(80);
+		assert.ok(partialLines.some((l: string) => l.includes("Connecting...")));
+		assert.ok(partialLines.some((l: string) => l.includes("Elapsed ")));
+		assert.ok(state.interval !== undefined);
+
+		// Completion cleans up interval and sets endedAt
+		registeredTool.renderResult(
+			{
+				content: [{ type: "text", text: "Done" }],
+				details: {},
+			} as any,
+			{ expanded: false, isPartial: false },
+			theme,
+			{ state } as any,
+		);
+		assert.equal(state.interval, undefined);
+		assert.ok(typeof state.endedAt === "number");
 	});
 });
 

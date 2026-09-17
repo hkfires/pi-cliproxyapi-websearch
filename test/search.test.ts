@@ -103,6 +103,8 @@ describe("executeWebSearch", () => {
 		assert.ok(result.content[0]?.text.includes("## Sources"));
 		assert.ok(result.content[0]?.text.includes("[Weather CN](https://weather.example.com)"));
 		assert.equal(result.details.model, "gpt-5.6-sol");
+		assert.equal(typeof result.details.durationMs, "number");
+		assert.ok((result.details.durationMs as number) >= 0);
 	});
 
 	it("throws formatted error on HTTP failure", async () => {

@@ -85,6 +85,8 @@ export async function executeWebSearch(options: {
 		throw new Error("web_search requires a non-empty query");
 	}
 
+	const startTime = Date.now();
+
 	const targetModel = selectSearchModel(ctx, searchModelId);
 	const auth = await ctx.modelRegistry.getApiKeyAndHeaders(targetModel);
 	if (!auth.ok) {
@@ -278,6 +280,7 @@ export async function executeWebSearch(options: {
 			provider: targetModel.provider,
 			query: trimmedQuery,
 			sourcesCount: sourcesMap.size,
+			durationMs: Date.now() - startTime,
 		},
 	};
 }

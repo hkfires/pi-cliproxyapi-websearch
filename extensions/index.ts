@@ -28,6 +28,17 @@ export interface WebSearchDetails {
 	query?: string;
 	sourcesCount?: number;
 	error?: string;
+	durationMs?: number;
+}
+
+export interface WebSearchRenderState {
+	startedAt?: number;
+	endedAt?: number;
+	interval?: ReturnType<typeof setInterval>;
+}
+
+export function formatDuration(ms: number): string {
+	return `${(Math.max(0, ms) / 1000).toFixed(1)}s`;
 }
 
 export default function cliproxyapiWebSearch(pi: ExtensionAPI): void {
@@ -108,7 +119,12 @@ export default function cliproxyapiWebSearch(pi: ExtensionAPI): void {
 				onUpdate,
 			});
 		},
-		renderCall(args, theme) {
+		renderCall(args, theme, context) {
+			const state = context?.state as WebSearchRenderState | undefined;
+			if (state && context?.executionStarted && state.startedAt === undefined) {
+				state.startedAt = Date.now();
+				state.endedAt = undefined;
+			}
 			const rawQuery = (args as { query?: unknown })?.query;
 			const query = typeof rawQuery === "string" ? rawQuery.trim() : "";
 			const display = query.length > 70 ? `${query.slice(0, 67)}...` : query;
@@ -118,24 +134,71 @@ export default function cliproxyapiWebSearch(pi: ExtensionAPI): void {
 				0,
 			);
 		},
-		renderResult(result, { expanded, isPartial }, theme) {
+		renderResult(result, { expanded, isPartial }, theme, context) {
 			const details = (result.details ?? {}) as WebSearchDetails;
+			const state = context?.state as WebSearchRenderState | undefined;
+
+			if (state) {
+				if (state.startedAt === undefined && (isPartial || context?.executionStarted)) {
+					state.startedAt = Date.now();
+				}
+				if (state.startedAt !== undefined && isPartial && !state.interval && context?.invalidate) {
+					state.interval = setInterval(() => {
+						context.invalidate();
+					}, 1000);
+					if (typeof state.interval?.unref === "function") {
+						state.interval.unref();
+					}
+				}
+				if (!isPartial || context?.isError) {
+					state.endedAt ??= Date.now();
+					if (state.interval) {
+						clearInterval(state.interval);
+						state.interval = undefined;
+					}
+				}
+			}
+
+			const duration =
+				isPartial
+					? state?.startedAt !== undefined
+						? Math.max(0, Date.now() - state.startedAt)
+						: typeof details.durationMs === "number"
+							? details.durationMs
+							: undefined
+					: typeof details.durationMs === "number"
+						? details.durationMs
+						: state?.startedAt !== undefined
+							? Math.max(0, (state.endedAt ?? Date.now()) - state.startedAt)
+							: undefined;
+
+			const timeLabel = isPartial ? "Elapsed" : "Took";
+			const timeText =
+				duration !== undefined
+					? `${timeLabel} ${formatDuration(duration)}`
+					: "";
 
 			if (isPartial) {
 				const progress = result.content
 					.filter((c) => c.type === "text")
 					.map((c) => c.text)
-					.join("\n");
-				return new Text(theme.fg("muted", progress || "Searching web..."), 0, 0);
+					.join("\n")
+					.trim();
+				const progressText = theme.fg("muted", progress || "Searching web...");
+				const timeSuffix = timeText ? `\n\n${theme.fg("muted", timeText)}` : "";
+				return new Text(`${progressText}${timeSuffix}`, 0, 0);
 			}
 
-			const isError = Boolean(details.error);
+			const isError = Boolean(details.error) || Boolean(context?.isError);
 			if (isError) {
 				const errorText = result.content
 					.filter((c) => c.type === "text")
 					.map((c) => c.text)
-					.join("\n");
-				return new Text(theme.fg("error", `✗ ${errorText || "Web search failed"}`), 0, 0);
+					.join("\n")
+					.trim();
+				const errorMsg = theme.fg("error", `✗ ${errorText || "Web search failed"}`);
+				const timeSuffix = timeText ? `\n\n${theme.fg("muted", timeText)}` : "";
+				return new Text(`${errorMsg}${timeSuffix}`, 0, 0);
 			}
 
 			if (!expanded) {
@@ -146,18 +209,23 @@ export default function cliproxyapiWebSearch(pi: ExtensionAPI): void {
 						: 0;
 				const sourceSuffix = count > 0 ? ` (${count} source${count === 1 ? "" : "s"})` : "";
 				const modelSuffix = model ? ` via ${model}` : "";
-				return new Text(
-					theme.fg("muted", `✓ Completed${modelSuffix}${sourceSuffix}`),
-					0,
-					0,
+				const statusText = theme.fg(
+					"muted",
+					`✓ Completed${modelSuffix}${sourceSuffix}`,
 				);
+				const timeSuffix = timeText ? `\n\n${theme.fg("muted", timeText)}` : "";
+				return new Text(`${statusText}${timeSuffix}`, 0, 0);
 			}
 
 			const outputText = result.content
 				.filter((c) => c.type === "text")
 				.map((c) => c.text)
-				.join("\n");
-			return new Text(theme.fg("toolOutput", outputText), 0, 0);
+				.join("\n")
+				.trim();
+			const contentText = outputText ? theme.fg("toolOutput", outputText) : "";
+			const separator = contentText && timeText ? "\n\n" : "";
+			const footerText = timeText ? theme.fg("muted", timeText) : "";
+			return new Text(`${contentText}${separator}${footerText}`, 0, 0);
 		},
 	});
 
