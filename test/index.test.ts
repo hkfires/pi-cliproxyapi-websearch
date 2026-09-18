@@ -1,6 +1,10 @@
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import assert from "node:assert/strict";
-import { beforeEach, describe, it, mock } from "node:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, it, mock } from "node:test";
+import { getConfigPath } from "../extensions/config.ts";
 import cliproxyapiWebSearch, {
 	formatDuration,
 	TOOL_NAME,
@@ -11,8 +15,13 @@ let registeredTool: ToolDefinition | undefined;
 let registeredCommand: any;
 let mockPi: any;
 let eventHandlers = new Map<string, Function>();
+let testAgentDir: string;
+let previousAgentDir: string | undefined;
 
 beforeEach(() => {
+	previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	testAgentDir = mkdtempSync(join(tmpdir(), "pi-websearch-test-"));
+	process.env.PI_CODING_AGENT_DIR = testAgentDir;
 	registeredTool = undefined;
 	registeredCommand = undefined;
 	eventHandlers = new Map();
@@ -28,6 +37,15 @@ beforeEach(() => {
 		}),
 	};
 	cliproxyapiWebSearch(mockPi as unknown as ExtensionAPI);
+});
+
+afterEach(() => {
+	if (previousAgentDir === undefined) {
+		delete process.env.PI_CODING_AGENT_DIR;
+	} else {
+		process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+	}
+	rmSync(testAgentDir, { recursive: true, force: true });
 });
 
 describe("extension registration", () => {
@@ -94,7 +112,12 @@ describe("extension registration", () => {
 		const completionsGpt = registeredCommand.getArgumentCompletions("gpt");
 		assert.ok(completionsGpt.some((c: any) => c.value === "gpt-5.6-sol"));
 
+		assert.equal(getConfigPath(), join(testAgentDir, "cliproxyapi-websearch.json"));
 		await registeredCommand.handler("", mockCtx);
+		assert.deepEqual(
+			JSON.parse(readFileSync(join(testAgentDir, "cliproxyapi-websearch.json"), "utf8")),
+			{ searchModel: "gpt-5.6-sol" },
+		);
 		assert.equal(selectTitle, "Select Web Search Model");
 		assert.ok(selectOptions.some((o) => o.includes("Current model")));
 		assert.ok(selectOptions.some((o) => o.includes("gpt-5.6-sol")));
@@ -102,9 +125,13 @@ describe("extension registration", () => {
 
 		await registeredCommand.handler("current", mockCtx);
 		assert.ok(notifiedMessage.includes("current session model"));
+		assert.deepEqual(
+			JSON.parse(readFileSync(join(testAgentDir, "cliproxyapi-websearch.json"), "utf8")),
+			{},
+		);
 	});
 
-	it("renders tool call cleanly", () => {
+	it("renders tool call cleanly without artificial outer quotes", () => {
 		assert.ok(registeredTool?.renderCall);
 		const theme = {
 			fg: (_color: string, text: string) => text,
@@ -112,7 +139,22 @@ describe("extension registration", () => {
 		} as any;
 		const comp = registeredTool.renderCall({ query: "test query" }, theme, {} as any);
 		const lines = comp.render(80);
-		assert.ok(lines.some((l: string) => l.includes('"test query"')));
+		assert.ok(lines.some((l: string) => l.includes("web_search test query")));
+		assert.ok(!lines.some((l: string) => l.includes('"test query"')));
+
+		// Preserves query's own inner quotes cleanly without doubling
+		const quoteComp = registeredTool.renderCall(
+			{ query: '"definePluginEntry" "registerProvider"' },
+			theme,
+			{} as any,
+		);
+		const quoteLines = quoteComp.render(80);
+		assert.ok(
+			quoteLines.some((l: string) =>
+				l.includes('web_search "definePluginEntry" "registerProvider"'),
+			),
+		);
+		assert.ok(!quoteLines.some((l: string) => l.includes('""definePluginEntry"')));
 	});
 
 	it("renders tool result compactly when collapsed and verbose when expanded", () => {
@@ -222,7 +264,7 @@ describe("extension registration", () => {
 		const state: WebSearchRenderState = { startedAt: Date.now() - 1500 };
 		const partialWithState = registeredTool.renderResult(
 			{
-				content: [{ type: "text", text: "Connecting..." }],
+				content: [{ type: "text", text: "Starting..." }],
 				details: {},
 			} as any,
 			{ expanded: false, isPartial: true },
@@ -230,7 +272,7 @@ describe("extension registration", () => {
 			{ state, invalidate: () => {} } as any,
 		);
 		const partialLines = partialWithState.render(80);
-		assert.ok(partialLines.some((l: string) => l.includes("Connecting...")));
+		assert.ok(partialLines.some((l: string) => l.includes("Starting...")));
 		assert.ok(partialLines.some((l: string) => l.includes("Elapsed ")));
 		assert.ok(state.interval !== undefined);
 

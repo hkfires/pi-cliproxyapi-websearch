@@ -109,8 +109,8 @@ export async function executeWebSearch(options: {
 	}
 
 	onUpdate?.({
-		content: [{ type: "text", text: `Connecting to web search (${targetModel.id})...` }],
-		details: { model: targetModel.id, phase: "connecting" },
+		content: [{ type: "text", text: `Starting web search (${targetModel.id})...` }],
+		details: { model: targetModel.id, phase: "starting" },
 	});
 
 	const requestBody = {
@@ -171,7 +171,7 @@ export async function executeWebSearch(options: {
 				if (lastPhase !== "searching") {
 					lastPhase = "searching";
 					onUpdate?.({
-						content: [{ type: "text", text: `Searching the web for: "${trimmedQuery}"...` }],
+						content: [{ type: "text", text: `Searching the web for ${trimmedQuery}...` }],
 						details: { phase: "searching", model: targetModel.id },
 					});
 				}

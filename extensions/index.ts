@@ -129,7 +129,7 @@ export default function cliproxyapiWebSearch(pi: ExtensionAPI): void {
 			const query = typeof rawQuery === "string" ? rawQuery.trim() : "";
 			const display = query.length > 70 ? `${query.slice(0, 67)}...` : query;
 			return new Text(
-				`${theme.fg("toolTitle", theme.bold("web_search"))} ${theme.fg("accent", `"${display}"`)}`,
+				`${theme.fg("toolTitle", theme.bold("web_search"))} ${theme.fg("accent", display)}`,
 				0,
 				0,
 			);
@@ -184,7 +184,7 @@ export default function cliproxyapiWebSearch(pi: ExtensionAPI): void {
 					.map((c) => c.text)
 					.join("\n")
 					.trim();
-				const progressText = theme.fg("muted", progress || "Searching web...");
+				const progressText = theme.fg("muted", progress || "Searching the web...");
 				const timeSuffix = timeText ? `\n\n${theme.fg("muted", timeText)}` : "";
 				return new Text(`${progressText}${timeSuffix}`, 0, 0);
 			}
