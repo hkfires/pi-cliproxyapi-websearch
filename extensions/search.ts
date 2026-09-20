@@ -21,6 +21,11 @@ export interface WebSearchSource {
 export const SEARCH_INSTRUCTIONS =
 	"You are a web search assistant. Search the web to find accurate, up-to-date information for the user's query. Provide a comprehensive summary with all relevant details, numbers, dates, and sources.";
 
+export function buildSearchInstructions(referenceDate = new Date()): string {
+	const dateStr = referenceDate.toISOString().slice(0, 10);
+	return `${SEARCH_INSTRUCTIONS}\nCurrent reference date: ${dateStr}. Use this reference date to ground relative time expressions (such as today, yesterday, recent, latest, or this year) and ensure search queries and results remain up to date.`;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -78,8 +83,9 @@ export async function executeWebSearch(options: {
 	signal?: AbortSignal;
 	onUpdate?: (update: SearchProgressUpdate) => void;
 	fetchFn?: typeof fetch;
+	now?: Date;
 }): Promise<WebSearchResult> {
-	const { query, ctx, searchModelId, signal, onUpdate, fetchFn = fetch } = options;
+	const { query, ctx, searchModelId, signal, onUpdate, fetchFn = fetch, now = new Date() } = options;
 	const trimmedQuery = query.trim();
 	if (!trimmedQuery) {
 		throw new Error("web_search requires a non-empty query");
@@ -121,7 +127,7 @@ export async function executeWebSearch(options: {
 				content: [{ type: "input_text", text: trimmedQuery }],
 			},
 		],
-		instructions: SEARCH_INSTRUCTIONS,
+		instructions: buildSearchInstructions(now),
 		tools: [{ type: "web_search" }],
 		stream: true,
 		store: false,

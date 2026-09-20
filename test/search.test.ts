@@ -2,7 +2,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { executeWebSearch } from "../extensions/search.ts";
+import { buildSearchInstructions, executeWebSearch, SEARCH_INSTRUCTIONS } from "../extensions/search.ts";
 
 function makeModel(id = "gpt-5.6-sol"): Model<Api> {
 	return {
@@ -44,6 +44,14 @@ function createMockStream(lines: string[]): ReadableStream<Uint8Array> {
 }
 
 describe("executeWebSearch", () => {
+	it("builds search instructions with formatted reference date", () => {
+		const fixedDate = new Date("2026-09-20T08:30:00Z");
+		const instructions = buildSearchInstructions(fixedDate);
+		assert.ok(instructions.startsWith(SEARCH_INSTRUCTIONS));
+		assert.ok(instructions.includes("Current reference date: 2026-09-20."));
+		assert.ok(instructions.includes("ground relative time expressions"));
+	});
+
 	it("rejects empty or whitespace query", async () => {
 		const ctx = mockContext();
 		await assert.rejects(
@@ -82,11 +90,13 @@ describe("executeWebSearch", () => {
 			});
 		};
 
+		const fixedDate = new Date("2026-09-20T08:30:00Z");
 		const updates: string[] = [];
 		const result = await executeWebSearch({
 			query: "Ningbo weather",
 			ctx,
 			fetchFn: mockFetch as any,
+			now: fixedDate,
 			onUpdate: (u) => updates.push(u.content[0]?.text ?? ""),
 		});
 
@@ -98,6 +108,7 @@ describe("executeWebSearch", () => {
 		assert.equal(requestBody.model, "gpt-5.6-sol");
 		assert.deepEqual(requestBody.tools, [{ type: "web_search" }]);
 		assert.equal(requestBody.stream, true);
+		assert.ok(requestBody.instructions.includes("Current reference date: 2026-09-20."));
 
 		assert.ok(result.content[0]?.text.includes("Ningbo weather forecast: cloudy, temperatures 22-29C."));
 		assert.ok(result.content[0]?.text.includes("## Sources"));
