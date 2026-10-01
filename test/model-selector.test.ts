@@ -43,6 +43,9 @@ describe("isSearchModel", () => {
 		assert.equal(isSearchModel("gpt-5.6-sol"), true);
 		assert.equal(isSearchModel("gpt-5.6-turbo"), true);
 		assert.equal(isSearchModel("gpt-6-astra"), true);
+		assert.equal(isSearchModel("gpt-6.1-sol"), true);
+		assert.equal(isSearchModel("gpt-6.2-astra"), true);
+		assert.equal(isSearchModel(" GPT-6.1-SOL "), true);
 		assert.equal(isSearchModel("gemini-3.8-flash-high"), true);
 		assert.equal(isSearchModel("grok-4.5"), true);
 		assert.equal(isSearchModel("grok-3-mini"), true);
@@ -53,6 +56,9 @@ describe("isSearchModel", () => {
 	it("rejects non-search models", () => {
 		assert.equal(isSearchModel("claude-3-7-sonnet"), false);
 		assert.equal(isSearchModel("gpt-4o"), false);
+		assert.equal(isSearchModel("gpt-6x1-sol"), false);
+		assert.equal(isSearchModel("gpt-6.1"), false);
+		assert.equal(isSearchModel("gpt-60-sol"), false);
 		assert.equal(isSearchModel(""), false);
 		assert.equal(isSearchModel(undefined), false);
 	});
@@ -115,6 +121,7 @@ describe("selectSearchModel", () => {
 describe("getCliProxyModels (predefined search models filter)", () => {
 	it("filters out non-search and non-cliproxyapi models strictly", () => {
 		const searchSol = makeModel("gpt-5.6-sol");
+		const searchSol61 = makeModel("gpt-6.1-sol");
 		const searchGemini = makeModel("gemini-3.8-flash-high");
 		const nonSearchGlm = makeModel("glm-4.5-air");
 		const nonSearchGemini = makeModel("gemini-3-flash");
@@ -123,6 +130,7 @@ describe("getCliProxyModels (predefined search models filter)", () => {
 		const ctx = mockContext({
 			availableModels: [
 				searchSol,
+				searchSol61,
 				nonSearchGlm,
 				searchGemini,
 				nonSearchGemini,
@@ -131,10 +139,10 @@ describe("getCliProxyModels (predefined search models filter)", () => {
 		});
 
 		const filtered = getCliProxyModels(ctx);
-		assert.equal(filtered.length, 2);
+		assert.equal(filtered.length, 3);
 		assert.deepEqual(
 			filtered.map((m) => m.id),
-			["gpt-5.6-sol", "gemini-3.8-flash-high"],
+			["gpt-5.6-sol", "gpt-6.1-sol", "gemini-3.8-flash-high"],
 		);
 	});
 

@@ -6,7 +6,7 @@ export const TARGET_PROVIDER_ID = "cliproxyapi";
 export const BUILTIN_SEARCH_MODEL_RULES: ReadonlyArray<string | RegExp> = [
 	"gemini-3.8-flash-high",
 	/^gpt-5\.6-.*$/i,
-	/^gpt-6-.*$/i,
+	/^gpt-6(?:\.\d+)?-.*$/i,
 	/^grok-.*$/i,
 	/^gpt-5\.5$/i,
 ];

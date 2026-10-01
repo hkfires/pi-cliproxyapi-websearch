@@ -131,6 +131,40 @@ describe("extension registration", () => {
 		);
 	});
 
+	it("includes gpt-6.1-sol in completions, selection and direct assignment", async () => {
+		const models = [{ id: "gpt-6.1-sol", provider: "cliproxyapi" }];
+		const select = mock.fn(async (_title: string, options: string[]) => {
+			assert.ok(options.includes("gpt-6.1-sol"));
+			return "gpt-6.1-sol";
+		});
+		const notify = mock.fn();
+		const ctx = {
+			hasUI: true,
+			model: models[0],
+			modelRegistry: {
+				getAll: () => models,
+				getAvailable: () => models,
+			},
+			ui: { select, notify },
+		};
+		eventHandlers.get("session_start")?.({ type: "session_start" }, ctx);
+
+		const completions = registeredCommand.getArgumentCompletions("gpt-6.1");
+		assert.ok(completions.some((c: any) => c.value === "gpt-6.1-sol"));
+
+		await registeredCommand.handler("", ctx);
+		assert.equal(select.mock.calls.length, 1);
+		assert.deepEqual(JSON.parse(readFileSync(getConfigPath(), "utf8")), {
+			searchModel: "gpt-6.1-sol",
+		});
+
+		await registeredCommand.handler("GPT-6.1-SOL", ctx);
+		assert.equal(notify.mock.calls.at(-1)?.arguments[1], "info");
+		assert.deepEqual(JSON.parse(readFileSync(getConfigPath(), "utf8")), {
+			searchModel: "gpt-6.1-sol",
+		});
+	});
+
 	it("renders tool call cleanly without artificial outer quotes", () => {
 		assert.ok(registeredTool?.renderCall);
 		const theme = {
