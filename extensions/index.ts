@@ -108,6 +108,12 @@ export default function cliproxyapiWebSearch(pi: ExtensionAPI): void {
 			"Use the returned web search results to formulate your response accurately.",
 		],
 		parameters: WebSearchParameters,
+		annotations: {
+			readOnlyHint: true,
+			destructiveHint: false,
+			idempotentHint: true,
+			openWorldHint: true,
+		},
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			activeContext = ctx;
 			const config = loadConfig();

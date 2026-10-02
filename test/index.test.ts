@@ -63,6 +63,12 @@ describe("extension registration", () => {
 		);
 		assert.equal((registeredTool.parameters as any).type, "object");
 		assert.ok("query" in ((registeredTool.parameters as any).properties ?? {}));
+		assert.deepEqual(registeredTool.annotations, {
+			readOnlyHint: true,
+			destructiveHint: false,
+			idempotentHint: true,
+			openWorldHint: true,
+		});
 	});
 
 	it("registers websearch-model command with autocompletions and interactive selection", async () => {
