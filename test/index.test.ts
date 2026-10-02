@@ -1,10 +1,17 @@
-import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import {
+	createCodemodeExtension,
+	type ExecuteToolOptions,
+	type ExtensionAPI,
+	type ExtensionToolContext,
+	type ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it, mock } from "node:test";
 import { getConfigPath } from "../extensions/config.ts";
+import { WebSearchOutputSchema } from "../extensions/search.ts";
 import cliproxyapiWebSearch, {
 	formatDuration,
 	TOOL_NAME,
@@ -63,6 +70,8 @@ describe("extension registration", () => {
 		);
 		assert.equal((registeredTool.parameters as any).type, "object");
 		assert.ok("query" in ((registeredTool.parameters as any).properties ?? {}));
+		assert.equal(registeredTool.outputSchema, WebSearchOutputSchema);
+		assert.equal(registeredTool.exposure, "direct");
 		assert.deepEqual(registeredTool.annotations, {
 			readOnlyHint: true,
 			destructiveHint: false,
@@ -203,11 +212,18 @@ describe("extension registration", () => {
 			fg: (_color: string, text: string) => text,
 		} as any;
 
+		const structuredContent = {
+			query: "weather",
+			text: "Long detailed weather content",
+			sources: [{ url: "https://example.com/1" }, { url: "https://example.com/2" }],
+		};
+
 		// Collapsed
 		const collapsedComp = registeredTool.renderResult(
 			{
 				content: [{ type: "text", text: "Long detailed weather content" }],
 				details: { model: "gpt-5.6-sol", sourcesCount: 2 },
+				structuredContent,
 			} as any,
 			{ expanded: false, isPartial: false },
 			theme,
@@ -221,6 +237,7 @@ describe("extension registration", () => {
 			{
 				content: [{ type: "text", text: "Long detailed weather content" }],
 				details: { model: "gpt-5.6-sol", sourcesCount: 2 },
+				structuredContent,
 			} as any,
 			{ expanded: true, isPartial: false },
 			theme,
@@ -241,6 +258,91 @@ describe("extension registration", () => {
 		);
 		const partialLines = partialComp.render(80);
 		assert.ok(partialLines.some((l: string) => l.includes("Searching web for: test...")));
+	});
+
+	it("returns structured search results to Pi's real Codemode sandbox", async (t) => {
+		assert.ok(registeredTool);
+		const searchTool = registeredTool;
+		let codemodeTool: ToolDefinition | undefined;
+		createCodemodeExtension({ models: false })({
+			registerTool: (tool: ToolDefinition) => { codemodeTool = tool; },
+		} as unknown as ExtensionAPI);
+		assert.ok(codemodeTool);
+
+		const fetchMock = t.mock.method(globalThis, "fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
+			const body = JSON.parse(String(init?.body));
+			const query = body.input[0].content[0].text;
+			const events = [
+				{ type: "response.output_text.delta", delta: `Summary for ${query}` },
+				{
+					type: "response.output_item.done",
+					item: {
+						type: "web_search_call",
+						action: { sources: [{ url: `https://example.com/${query}`, title: query }] },
+					},
+				},
+			];
+			return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""));
+		});
+		const model = { id: "gpt-6.1-sol", provider: "cliproxyapi", baseUrl: "https://cpa.example.com/v1" };
+		let callCount = 0;
+		const ctx = {
+			model,
+			modelRegistry: {
+				getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key" }),
+			},
+			sessionManager: { getBranch: () => [] },
+			tools: [searchTool],
+			executeTool: async (name: string, args: unknown, options?: ExecuteToolOptions) => {
+				assert.equal(name, TOOL_NAME);
+				const toolCall = { type: "toolCall", id: `script/${++callCount}`, name, arguments: args };
+				try {
+					const result = await searchTool.execute(toolCall.id, args, options?.signal, undefined, ctx);
+					return { toolCall, result, isError: false };
+				} catch (error) {
+					return {
+						toolCall,
+						result: { content: [{ type: "text", text: String(error) }], details: undefined },
+						isError: true,
+					};
+				}
+			},
+		} as unknown as ExtensionToolContext;
+		const result = await codemodeTool.execute("script", {
+			code: `
+				const results = await Promise.all([
+					tools.web_search({ query: "first" }),
+					tools.web_search({ query: "second" }),
+				]);
+				return results.map(result => ({
+					query: result.query,
+					url: result.sources[0].url,
+					title: result.sources[0].title,
+					hasSummary: result.text.includes("Summary for " + result.query),
+				}));
+			`,
+		}, undefined, undefined, ctx);
+
+		assert.ok(!result.isError, JSON.stringify(result.content));
+		assert.equal(fetchMock.mock.calls.length, 2);
+		const output = result.content.find((block) => block.type === "text" && block.text.startsWith("["));
+		assert.ok(output?.type === "text");
+		assert.deepEqual(JSON.parse(output.text), [
+			{ query: "first", url: "https://example.com/first", title: "first", hasSummary: true },
+			{ query: "second", url: "https://example.com/second", title: "second", hasSummary: true },
+		]);
+
+		fetchMock.mock.mockImplementation(async () => new Response(
+			JSON.stringify({ error: { message: "Quota exceeded" } }),
+			{ status: 429 },
+		));
+		const failure = await codemodeTool.execute("failure", {
+			code: 'return await tools.web_search({ query: "test" });',
+		}, undefined, undefined, ctx);
+		assert.equal(failure.isError, true);
+		assert.ok(failure.content.some((block) =>
+			block.type === "text" && block.text.includes("Web search failed: Quota exceeded"),
+		));
 	});
 
 	it("formats duration correctly", () => {

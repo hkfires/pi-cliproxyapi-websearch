@@ -12,7 +12,7 @@ import {
 	sortSearchModels,
 	TARGET_PROVIDER_ID,
 } from "./model-selector.ts";
-import { executeWebSearch } from "./search.ts";
+import { executeWebSearch, WebSearchOutputSchema } from "./search.ts";
 
 export const TOOL_NAME = "web_search";
 
@@ -108,6 +108,8 @@ export default function cliproxyapiWebSearch(pi: ExtensionAPI): void {
 			"Use the returned web search results to formulate your response accurately.",
 		],
 		parameters: WebSearchParameters,
+		outputSchema: WebSearchOutputSchema,
+		exposure: "direct",
 		annotations: {
 			readOnlyHint: true,
 			destructiveHint: false,

@@ -25,6 +25,10 @@ it("loads manifest entry points with Pi's actual TypeScript loader", async () =>
 		assert.equal(tool?.definition.name, "web_search");
 		assert.equal(tool?.definition.label, "web_search");
 		assert.ok(tool?.definition.description.includes("Search the web"));
+		assert.equal(tool?.definition.exposure, "direct");
+		const outputSchema = tool?.definition.outputSchema as { type?: string; required?: string[] } | undefined;
+		assert.equal(outputSchema?.type, "object");
+		assert.deepEqual(outputSchema?.required, ["query", "text", "sources"]);
 
 		assert.equal(extension.commands.has("websearch-model"), true);
 		const command = extension.commands.get("websearch-model");

@@ -48,6 +48,39 @@ pi install npm:pi-cliproxyapi-websearch
 
 ---
 
+## Codemode
+
+With Codemode enabled in Pi 1.0.0, scripts can call `tools.web_search({ query })` and receive an object with:
+
+- `query`: the trimmed search query.
+- `text`: the same Markdown summary returned by a normal tool call.
+- `sources`: all unique reported sources as `{ url, title? }` (an empty array when none are reported).
+
+To enable Codemode in Pi, add `+codemode` to `defaultTools` in `~/.pi/agent/settings.json`:
+
+```json
+{
+  "defaultTools": ["+codemode"]
+}
+```
+
+Example Codemode script:
+
+```javascript
+const results = await Promise.all([
+  tools.web_search({ query: "Node.js release notes" }),
+  tools.web_search({ query: "TypeScript release notes" }),
+]);
+for (const result of results) {
+  text(result.text);
+  text(result.sources.map((source) => source.url));
+}
+```
+
+The tool remains available for normal calls without Codemode; text output, progress updates, and terminal rendering are unchanged. Failed searches reject the script call rather than returning an empty success result.
+
+---
+
 ## Development
 
 ```bash
@@ -102,6 +135,39 @@ pi install npm:pi-cliproxyapi-websearch
 | `/websearch-model` | **交互式选择**：弹出终端选择菜单（`ctx.ui.select`），首项为动态跟随当前会话模型，其余候选模型按字母顺序排列，直接用方向键选择 |
 | `/websearch-model <model-id>` | **命令行直设**：直接指定特定的 CLIProxyAPI 搜索模型（支持 Tab 键自动补全） |
 | `/websearch-model reset` | **重置为默认**：恢复为自动跟随当前会话模型（支持 `reset`、`current`、`auto`） |
+
+---
+
+## Codemode
+
+在 Pi 1.0.0 中启用 Codemode 后，脚本可通过 `tools.web_search({ query })` 获取结构化对象：
+
+- `query`：去除首尾空白后的查询。
+- `text`：与普通工具调用相同的 Markdown 搜索总结。
+- `sources`：返回的全部去重来源，格式为 `{ url, title? }`，无来源时为空数组。
+
+要在 Pi 中启用 Codemode，推荐在 `~/.pi/agent/settings.json` 的 `defaultTools` 中添加 `+codemode`：
+
+```json
+{
+  "defaultTools": ["+codemode"]
+}
+```
+
+Codemode 脚本示例：
+
+```javascript
+const results = await Promise.all([
+  tools.web_search({ query: "Node.js 发布说明" }),
+  tools.web_search({ query: "TypeScript 发布说明" }),
+]);
+for (const result of results) {
+  text(result.text);
+  text(result.sources.map((source) => source.url));
+}
+```
+
+未启用 Codemode 时仍可正常调用，文本输出、进度通知和终端展示保持不变。搜索失败时脚本调用会抛出错误，不会返回空的成功结果。
 
 ---
 

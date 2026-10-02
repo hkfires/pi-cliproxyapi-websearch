@@ -1,4 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { type Static, Type } from "typebox";
 import { resolveResponsesEndpoint } from "./endpoint.ts";
 import { selectSearchModel } from "./model-selector.ts";
 import { consumeSseStream, type SseEvent } from "./sse.ts";
@@ -8,14 +9,25 @@ export interface SearchProgressUpdate {
 	details: Record<string, unknown>;
 }
 
+export const WebSearchOutputSchema = Type.Object({
+	query: Type.String({ description: "The trimmed search query" }),
+	text: Type.String({ description: "Search summary, including any appended source links" }),
+	sources: Type.Array(
+		Type.Object({
+			url: Type.String(),
+			title: Type.Optional(Type.String()),
+		}),
+		{ description: "All unique sources reported by the search response" },
+	),
+});
+
+export type WebSearchOutput = Static<typeof WebSearchOutputSchema>;
+export type WebSearchSource = WebSearchOutput["sources"][number];
+
 export interface WebSearchResult {
 	content: Array<{ type: "text"; text: string }>;
+	structuredContent: WebSearchOutput;
 	details: Record<string, unknown>;
-}
-
-export interface WebSearchSource {
-	title?: string;
-	url: string;
 }
 
 export const SEARCH_INSTRUCTIONS =
@@ -281,6 +293,14 @@ export async function executeWebSearch(options: {
 
 	return {
 		content: [{ type: "text", text: finalText }],
+		structuredContent: {
+			query: trimmedQuery,
+			text: finalText,
+			sources: Array.from(sourcesMap, ([url, title]) => ({
+				url,
+				...(title ? { title } : {}),
+			})),
+		},
 		details: {
 			model: targetModel.id,
 			provider: targetModel.provider,
