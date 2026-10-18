@@ -1,8 +1,16 @@
+import { type Api, calculateCost, type Model, type Usage } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { resolveResponsesEndpoint } from "./endpoint.ts";
 import { selectSearchModel } from "./model-selector.ts";
 import { consumeSseStream, type SseEvent } from "./sse.ts";
+
+export interface StandardCostRequest {
+	providerId: string;
+	modelId: string;
+	signal?: AbortSignal;
+	cost?: Promise<Model<Api>["cost"] | undefined>;
+}
 
 export interface SearchProgressUpdate {
 	content: Array<{ type: "text"; text: string }>;
@@ -28,6 +36,7 @@ export interface WebSearchResult {
 	content: Array<{ type: "text"; text: string }>;
 	structuredContent: WebSearchOutput;
 	details: Record<string, unknown>;
+	usage?: Usage;
 }
 
 export const SEARCH_INSTRUCTIONS =
@@ -52,6 +61,47 @@ function extractErrorMessage(payload: unknown, defaultMsg: string): string {
 		return payload.message.trim();
 	}
 	return defaultMsg;
+}
+
+// Mirrors pi-ai's Responses usage mapping so nested search requests count toward session totals.
+// Invalid billing metadata is omitted rather than converted into zero usage.
+function toUsage(raw: unknown, model: Model<Api>): Usage | undefined {
+	if (!isRecord(raw)) return undefined;
+	const {
+		input_tokens: input,
+		output_tokens: output,
+		input_tokens_details: inputDetails = {},
+		output_tokens_details: outputDetails = {},
+		total_tokens: reportedTotal,
+	} = raw;
+	if (!isRecord(inputDetails) || !isRecord(outputDetails)) return undefined;
+	const { cached_tokens: cacheRead = 0, cache_write_tokens: cacheWrite = 0 } = inputDetails;
+	const { reasoning_tokens: reasoning = 0 } = outputDetails;
+	const isTokenCount = (value: unknown): value is number =>
+		typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+	if (
+		!isTokenCount(input) ||
+		!isTokenCount(output) ||
+		!isTokenCount(cacheRead) ||
+		!isTokenCount(cacheWrite) ||
+		!isTokenCount(reasoning)
+	) {
+		return undefined;
+	}
+	const totalTokens = reportedTotal === undefined ? input + output : reportedTotal;
+	if (!isTokenCount(totalTokens)) return undefined;
+	const usage: Usage = {
+		// Responses input_tokens includes cached and cache-write tokens.
+		input: Math.max(0, input - cacheRead - cacheWrite),
+		output,
+		cacheRead,
+		cacheWrite,
+		reasoning,
+		totalTokens,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	};
+	calculateCost(model, usage);
+	return usage;
 }
 
 function extractSourcesFromItem(
@@ -92,12 +142,13 @@ export async function executeWebSearch(options: {
 	query: string;
 	ctx: ExtensionContext;
 	searchModelId?: string;
+	getStandardCost?: (model: Model<Api>, signal?: AbortSignal) => Promise<Model<Api>["cost"] | undefined>;
 	signal?: AbortSignal;
 	onUpdate?: (update: SearchProgressUpdate) => void;
 	fetchFn?: typeof fetch;
 	now?: Date;
 }): Promise<WebSearchResult> {
-	const { query, ctx, searchModelId, signal, onUpdate, fetchFn = fetch, now = new Date() } = options;
+	const { query, ctx, searchModelId, getStandardCost, signal, onUpdate, fetchFn = fetch, now = new Date() } = options;
 	const trimmedQuery = query.trim();
 	if (!trimmedQuery) {
 		throw new Error("web_search requires a non-empty query");
@@ -145,6 +196,15 @@ export async function executeWebSearch(options: {
 		store: false,
 	};
 
+	// This request never sends service_tier: "priority". Codex response tiers are not reliable.
+	let standardCost: Model<Api>["cost"] | undefined;
+	try {
+		standardCost = await getStandardCost?.(targetModel, signal);
+	} catch {
+		// Pricing is optional: lookup failures must not prevent searching.
+	}
+	signal?.throwIfAborted();
+
 	const response = await fetchFn(endpoint, {
 		method: "POST",
 		headers,
@@ -171,6 +231,7 @@ export async function executeWebSearch(options: {
 	let outputText = "";
 	const messageParts: string[] = [];
 	const sourcesMap = new Map<string, string>();
+	let usage: Usage | undefined;
 	let lastPhase = "";
 	let lastDeltaUpdateTime = 0;
 	const DELTA_THROTTLE_MS = 100;
@@ -267,6 +328,15 @@ export async function executeWebSearch(options: {
 				}
 			} else if (eventType === "response.completed") {
 				const res = isRecord(data) && isRecord(data.response) ? data.response : data;
+				// Pi usage requires a cost; omit unpriced usage rather than invent zero or Fast pricing.
+				if (isRecord(res) && standardCost) {
+					try {
+						usage = toUsage(res.usage, { ...targetModel, cost: standardCost });
+					} catch {
+						// Optional billing failures must not discard search results or trigger a retry.
+						usage = undefined;
+					}
+				}
 				if (isRecord(res) && Array.isArray(res.output)) {
 					for (const item of res.output) {
 						if (isRecord(item)) {
@@ -308,5 +378,6 @@ export async function executeWebSearch(options: {
 			sourcesCount: sourcesMap.size,
 			durationMs: Date.now() - startTime,
 		},
+		...(usage ? { usage } : {}),
 	};
 }

@@ -1,7 +1,10 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+	type ExtensionAPI,
+	type ExtensionContext,
+	getAgentDir,
+} from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { loadConfig, saveConfig } from "./config.ts";
@@ -12,13 +15,14 @@ import {
 	sortSearchModels,
 	TARGET_PROVIDER_ID,
 } from "./model-selector.ts";
-import { executeWebSearch, WebSearchOutputSchema } from "./search.ts";
+import { executeWebSearch, type StandardCostRequest, WebSearchOutputSchema } from "./search.ts";
 
 export const TOOL_NAME = "web_search";
 
 export const WebSearchParameters = Type.Object({
 	query: Type.String({
 		description: "The web search query keywords or question to look up online",
+		minLength: 1,
 	}),
 });
 
@@ -37,8 +41,15 @@ export interface WebSearchRenderState {
 	interval?: ReturnType<typeof setInterval>;
 }
 
+/** Matches Pi's tool duration format: `4.2s` below a minute, then `1m 30s` and `2h 3m 4s`. */
 export function formatDuration(ms: number): string {
-	return `${(Math.max(0, ms) / 1000).toFixed(1)}s`;
+	const seconds = Math.max(0, ms) / 1000;
+	if (seconds < 60) return `${seconds.toFixed(1)}s`;
+	const totalSeconds = Math.floor(seconds);
+	const minutes = Math.floor(totalSeconds / 60);
+	const remainder = totalSeconds % 60;
+	if (minutes < 60) return `${minutes}m ${remainder}s`;
+	return `${Math.floor(minutes / 60)}h ${minutes % 60}m ${remainder}s`;
 }
 
 export default function cliproxyapiWebSearch(pi: ExtensionAPI): void {
@@ -68,12 +79,8 @@ export default function cliproxyapiWebSearch(pi: ExtensionAPI): void {
 		}
 
 		try {
-			const candidatePath = path.join(
-				os.homedir(),
-				".pi",
-				"agent",
-				"cliproxyapi-models.json",
-			);
+			// Same location the CLIProxyAPI provider writes its model cache to.
+			const candidatePath = path.join(getAgentDir(), "cliproxyapi-models.json");
 			if (fs.existsSync(candidatePath)) {
 				const raw = JSON.parse(fs.readFileSync(candidatePath, "utf8"));
 				if (Array.isArray(raw?.models)) {
@@ -123,6 +130,11 @@ export default function cliproxyapiWebSearch(pi: ExtensionAPI): void {
 				query: (params as { query: string }).query,
 				ctx,
 				searchModelId: config.searchModel,
+				async getStandardCost(model, signal) {
+					const request: StandardCostRequest = { providerId: model.provider, modelId: model.id, signal };
+					pi.events.emit("cliproxyapi:standard-cost", request);
+					return request.cost;
+				},
 				signal,
 				onUpdate,
 			});
@@ -167,18 +179,17 @@ export default function cliproxyapiWebSearch(pi: ExtensionAPI): void {
 				}
 			}
 
-			const duration =
-				isPartial
-					? state?.startedAt !== undefined
-						? Math.max(0, Date.now() - state.startedAt)
-						: typeof details.durationMs === "number"
-							? details.durationMs
-							: undefined
-					: typeof details.durationMs === "number"
-						? details.durationMs
-						: state?.startedAt !== undefined
-							? Math.max(0, (state.endedAt ?? Date.now()) - state.startedAt)
-							: undefined;
+			// Final rows prefer Pi's recorded execution time (Pi >= 1.1.0); details.durationMs covers
+			// older Pi versions and sessions, and the row clock is the last resort.
+			const duration = isPartial
+				? state?.startedAt !== undefined
+					? Math.max(0, Date.now() - state.startedAt)
+					: undefined
+				: (context?.durationMs ??
+					(typeof details.durationMs === "number" ? details.durationMs : undefined) ??
+					(state?.startedAt !== undefined
+						? Math.max(0, (state.endedAt ?? Date.now()) - state.startedAt)
+						: undefined));
 
 			const timeLabel = isPartial ? "Elapsed" : "Took";
 			const timeText =

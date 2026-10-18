@@ -1,12 +1,13 @@
 import {
 	createCodemodeExtension,
+	createEventBus,
 	type ExecuteToolOptions,
 	type ExtensionAPI,
 	type ExtensionToolContext,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it, mock } from "node:test";
@@ -33,6 +34,7 @@ beforeEach(() => {
 	registeredCommand = undefined;
 	eventHandlers = new Map();
 	mockPi = {
+		events: createEventBus(),
 		on: mock.fn((event: string, handler: Function) => {
 			eventHandlers.set(event, handler);
 		}),
@@ -70,6 +72,7 @@ describe("extension registration", () => {
 		);
 		assert.equal((registeredTool.parameters as any).type, "object");
 		assert.ok("query" in ((registeredTool.parameters as any).properties ?? {}));
+		assert.equal((registeredTool.parameters as any).properties.query.minLength, 1);
 		assert.equal(registeredTool.outputSchema, WebSearchOutputSchema);
 		assert.equal(registeredTool.exposure, "direct");
 		assert.deepEqual(registeredTool.annotations, {
@@ -180,6 +183,22 @@ describe("extension registration", () => {
 		});
 	});
 
+	it("falls back to the provider model cache in the configured agent dir", () => {
+		writeFileSync(
+			join(testAgentDir, "cliproxyapi-models.json"),
+			JSON.stringify({
+				models: [
+					{ id: "gpt-6.1-sol", name: "GPT 6.1 Sol" },
+					{ id: "claude-not-search" },
+				],
+			}),
+		);
+
+		const completions = registeredCommand.getArgumentCompletions("");
+		assert.ok(completions.some((c: any) => c.value === "gpt-6.1-sol" && c.description === "GPT 6.1 Sol"));
+		assert.ok(!completions.some((c: any) => c.value === "claude-not-search"));
+	});
+
 	it("renders tool call cleanly without artificial outer quotes", () => {
 		assert.ok(registeredTool?.renderCall);
 		const theme = {
@@ -263,9 +282,13 @@ describe("extension registration", () => {
 	it("returns structured search results to Pi's real Codemode sandbox", async (t) => {
 		assert.ok(registeredTool);
 		const searchTool = registeredTool;
+		mockPi.events.on("cliproxyapi:standard-cost", (request: any) => {
+			request.cost = Promise.resolve({ input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 });
+		});
 		let codemodeTool: ToolDefinition | undefined;
 		createCodemodeExtension({ models: false })({
 			registerTool: (tool: ToolDefinition) => { codemodeTool = tool; },
+			getAllTools: () => [searchTool],
 		} as unknown as ExtensionAPI);
 		assert.ok(codemodeTool);
 
@@ -345,11 +368,67 @@ describe("extension registration", () => {
 		));
 	});
 
+	it("searches when the provider pricing interface or model pricing is unavailable", async (t) => {
+		assert.ok(registeredTool);
+		const events = [
+			{ type: "response.output_text.delta", delta: "Search summary" },
+			{ type: "response.completed", response: { usage: { input_tokens: 1200, output_tokens: 300 } } },
+		];
+		const fetchMock = t.mock.method(globalThis, "fetch", async () =>
+			new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")),
+		);
+		const ctx = {
+			model: { id: "gpt-6.1-sol", provider: "cliproxyapi", baseUrl: "https://cpa.example.com/v1" },
+			modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key" }) },
+		} as unknown as ExtensionToolContext;
+		for (const scenario of ["no interface", "missing model pricing", "lookup failure"]) {
+			const unsubscribe = scenario === "no interface" ? undefined : mockPi.events.on(
+				"cliproxyapi:standard-cost", (request: any) => {
+					request.cost = scenario === "lookup failure"
+						? Promise.reject(new Error("Pricing unavailable"))
+						: Promise.resolve(undefined);
+				},
+			);
+			try {
+				const result = await registeredTool.execute(scenario, { query: "test" }, undefined, undefined, ctx);
+				assert.deepEqual(result.content, [{ type: "text", text: "Search summary" }]);
+				assert.deepEqual(result.structuredContent, { query: "test", text: "Search summary", sources: [] });
+				assert.equal("usage" in result, false);
+			} finally {
+				unsubscribe?.();
+			}
+		}
+		assert.equal(fetchMock.mock.calls.length, 3);
+	});
+
 	it("formats duration correctly", () => {
 		assert.equal(formatDuration(0), "0.0s");
 		assert.equal(formatDuration(1100), "1.1s");
 		assert.equal(formatDuration(2540), "2.5s");
 		assert.equal(formatDuration(-100), "0.0s");
+		assert.equal(formatDuration(60_000), "1m 0s");
+		assert.equal(formatDuration(90_500), "1m 30s");
+		assert.equal(formatDuration(3_723_000), "1h 2m 3s");
+	});
+
+	it("prefers Pi's recorded duration for final results", () => {
+		assert.ok(registeredTool?.renderResult);
+		const theme = { fg: (_color: string, text: string) => text } as any;
+		const render = (context: any, isError = false) =>
+			registeredTool!.renderResult!(
+				{
+					content: [{ type: "text", text: isError ? "Rate limit reached" : "Summary text" }],
+					details: isError ? { error: "Rate limit reached" } : { model: "gpt-5.6-sol", durationMs: 1100 },
+				} as any,
+				{ expanded: false, isPartial: false },
+				theme,
+				context,
+			).render(80);
+
+		assert.ok(render({ durationMs: 75_000 }).some((l: string) => l.includes("Took 1m 15s")));
+		// Thrown errors carry no details.durationMs; Pi's recorded time still shows.
+		assert.ok(render({ durationMs: 2_400, isError: true }, true).some((l: string) => l.includes("Took 2.4s")));
+		assert.ok(render({ durationMs: undefined }).some((l: string) => l.includes("Took 1.1s")));
 	});
 
 	it("renders execution time (Took / Elapsed) matching shell tool conventions", () => {
